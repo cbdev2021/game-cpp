@@ -75,5 +75,19 @@ make clean
 
 ## Controles actuales
 
-Esta primera version muestra el estado inicial del Guerrero y su posicion. Movimiento, combate, mapas, sprites y audio se incorporaran en iteraciones posteriores.
+La primera sala jugable incluye un Guerrero procedural, paredes, obstaculos, una puerta de salida y HUD.
+
+## Controles actuales
+
+El prototipo incluye un tramo lateral original con plataformas, camara, Guerrero procedural, enemigos y una salida.
+
+- `A/D` o flechas: mover.
+- `Espacio`, `W` o flecha arriba: saltar.
+- `J` o `X`: atacar.
+- `E`: abrir la salida al llegar al final.
+- `R`: reiniciar despues de ganar o perder.
+
+El arte es procedural y original. Los sprites, audio, mas enemigos y nuevas salas se incorporaran en iteraciones posteriores.
+
+El arte es procedural y original. En iteraciones posteriores se pueden incorporar sprites, enemigos, combate, audio y mas salas.
 # game-cpp
