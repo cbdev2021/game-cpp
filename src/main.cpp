@@ -1,4 +1,5 @@
 #include "raylib.h"
+#include "sprites.h"
 #include <cmath>
 
 #if defined(PLATFORM_WEB)
@@ -19,6 +20,7 @@ struct Player {
     int facing;
     bool grounded;
     float attackTimer;
+    bool crouching;
 };
 
 enum class EnemyType { SLIME, BAT };
@@ -43,6 +45,7 @@ static constexpr int WINDOW_HEIGHT = INTERNAL_HEIGHT * 2;
 static constexpr float WORLD_WIDTH = 1200.0f;
 static constexpr float PLAYER_WIDTH = 14.0f;
 static constexpr float PLAYER_HEIGHT = 25.0f;
+static constexpr float CROUCH_HEIGHT = 20.0f;
 static constexpr float PLAYER_SPEED = 105.0f;
 static constexpr float JUMP_SPEED = -205.0f;
 static constexpr float GRAVITY = 560.0f;
@@ -56,7 +59,7 @@ static bool warriorMoving = false;
 
 static Player warrior = {
     1, "WARRIOR", 100, 100, 0, 1,
-    {48.0f, 170.0f}, {0.0f, 0.0f}, 1, false, 0.0f
+    {48.0f, 170.0f}, {0.0f, 0.0f}, 1, false, 0.0f, false
 };
 
 static Enemy enemies[] = {
@@ -78,20 +81,26 @@ static const Color SOIL = {122, 92, 52, 255};
 static const Color SOIL_DARK = {94, 70, 40, 255};
 static const Color GRASS = {88, 168, 80, 255};
 static const Color GRASS_DARK = {60, 132, 60, 255};
-static const Color TUNIC = {46, 86, 176, 255};
-static const Color TUNIC_DARK = {36, 70, 144, 255};
 static const Color GOLD_DARK = {176, 128, 42, 255};
 static const Color SKIN = {232, 185, 140, 255};
-static const Color STEEL = {168, 176, 188, 255};
 static const Color PLUM = {200, 45, 45, 255};
+
+static sprites::Sheet warriorSheet;
+static sprites::Sheet slimeSheet;
+static sprites::Sheet batSheet;
 
 static void DR(float x, float y, float w, float h, Color c) {
     DrawRectangle(static_cast<int>(x + 0.5f), static_cast<int>(y + 0.5f),
                   static_cast<int>(w + 0.5f), static_cast<int>(h + 0.5f), c);
 }
 
+static float PlayerHeight() {
+    return warrior.crouching ? CROUCH_HEIGHT : PLAYER_HEIGHT;
+}
+
 static Rectangle GetPlayerBounds(const Vector2D& position) {
-    return {position.x - PLAYER_WIDTH * 0.5f, position.y - PLAYER_HEIGHT, PLAYER_WIDTH, PLAYER_HEIGHT};
+    const float h = PlayerHeight();
+    return {position.x - PLAYER_WIDTH * 0.5f, position.y - h, PLAYER_WIDTH, h};
 }
 
 static Rectangle GetEnemyBounds(const Enemy& enemy) {
@@ -111,6 +120,7 @@ static void ResetLevel() {
     warrior.facing = 1;
     warrior.grounded = false;
     warrior.attackTimer = 0.0f;
+    warrior.crouching = false;
     enemies[0] = {EnemyType::SLIME, {430.0f, 190.0f}, 190.0f, 390.0f, 500.0f, 24.0f, -1, 2, true, 0.0f};
     enemies[1] = {EnemyType::BAT, {760.0f, 120.0f}, 120.0f, 720.0f, 850.0f, 46.0f, 1, 2, true, 1.3f};
     levelComplete = false;
@@ -140,7 +150,7 @@ static void MovePlayerVertically(float amount) {
             warrior.velocity.y = 0.0f;
             warrior.grounded = true;
         } else if (amount < 0.0f) {
-            warrior.position.y = platform.y + platform.height + PLAYER_HEIGHT;
+            warrior.position.y = platform.y + platform.height + PlayerHeight();
             warrior.velocity.y = 0.0f;
         }
         bounds = GetPlayerBounds(warrior.position);
@@ -184,14 +194,18 @@ static void UpdateGame() {
         return;
     }
 
+    warrior.crouching = warrior.grounded && (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S));
+
     float horizontal = 0.0f;
-    if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) horizontal -= 1.0f;
-    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) horizontal += 1.0f;
-    warriorMoving = horizontal != 0.0f;
+    if (!warrior.crouching) {
+        if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) horizontal -= 1.0f;
+        if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) horizontal += 1.0f;
+    }
+    warriorMoving = horizontal != 0.0f && !warrior.crouching;
     if (horizontal != 0.0f) warrior.facing = horizontal > 0.0f ? 1 : -1;
     MovePlayerHorizontally(horizontal * PLAYER_SPEED * deltaTime);
 
-    if ((IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) && warrior.grounded) {
+    if ((IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) && warrior.grounded && !warrior.crouching) {
         warrior.velocity.y = JUMP_SPEED;
         warrior.grounded = false;
     }
@@ -215,126 +229,46 @@ static void DrawWarriorShadow() {
                 8.0f, squish, Fade(BLACK, 0.35f));
 }
 
-static void DrawWarrior() {
-    const float x = warrior.position.x;
-    const float y = warrior.position.y;
-    const int s = warrior.facing;
-    DrawWarriorShadow();
+static void DrawSheetFrame(const sprites::Sheet& sheet, int frame, float x, float y, int facing) {
+    if (!sheet.valid()) return;
+    const float w = static_cast<float>(sheet.frameW);
+    const float h = static_cast<float>(sheet.frameH);
+    const Rectangle src = facing >= 0
+        ? Rectangle{frame * w, 0.0f, w, h}
+        : Rectangle{(frame + 1) * w, 0.0f, -w, h};
+    const Rectangle dst = Rectangle{x - w * 0.5f, y - h, w, h};
+    DrawTexturePro(sheet.tex, src, dst, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+}
 
-    const float cycle = (animTime * 9.0f);
-    const float legSwing = warriorMoving ? fmaxf(-2.0f, fminf(sinf(cycle) * 2.0f, 2.0f)) : 0.0f;
-
-    const float bootL = s * legSwing * 0.5f;
-    const float bootR = -s * legSwing * 0.5f;
-
-    DR(x - 6.0f + bootL, y - 3.0f, 5.0f, 3.0f, Color{106, 68, 35, 255});
-    DR(x + 1.0f + bootR, y - 3.0f, 5.0f, 3.0f, Color{106, 68, 35, 255});
-    DR(x - 6.0f + bootL, y - 1.0f, 5.0f, 1.0f, Color{60, 38, 20, 255});
-    DR(x + 1.0f + bootR, y - 1.0f, 5.0f, 1.0f, Color{60, 38, 20, 255});
-
-    DR(x - 6.0f, y - 9.0f, 5.0f, 6.0f, Color{35, 58, 102, 255});
-    DR(x + 1.0f, y - 9.0f, 5.0f, 6.0f, Color{35, 58, 102, 255});
-    DR(x - 5.0f, y - 8.0f, 2.0f, 5.0f, Color{55, 84, 132, 255});
-    DR(x + 3.0f, y - 8.0f, 2.0f, 5.0f, Color{55, 84, 132, 255});
-
-    DR(x - 2.0f, y - 19.0f, 4.0f, 2.0f, SKIN);
-
-    DR(x - 7.0f, y - 17.0f, 14.0f, 8.0f, TUNIC);
-    DR(x - 7.0f, y - 17.0f, 14.0f, 2.0f, TUNIC_DARK);
-    DR(x - 1.0f, y - 16.0f, 2.0f, 7.0f, Color{88, 128, 218, 255});
-
-    const float pauldronX = x + s * 6.0f - 3.0f;
-    DR(pauldronX - 1.0f, y - 20.0f, 5.0f, 3.0f, GOLD);
-    DR(pauldronX - 1.0f, y - 20.0f, 5.0f, 1.0f, GOLD_DARK);
-
-    DR(x - 7.0f, y - 10.0f, 14.0f, 2.0f, GOLD);
-    DR(x - 1.0f, y - 10.0f, 2.0f, 2.0f, GOLD_DARK);
-
-    const float os = static_cast<float>(-s);
-    const float shieldX = x + os * 8.0f;
-    DR(shieldX - 3.0f, y - 20.0f, 6.0f, 10.0f, Color{158, 108, 62, 255});
-    DR(shieldX - 3.0f, y - 20.0f, 1.0f, 10.0f, GOLD);
-    DR(shieldX + 2.0f, y - 20.0f, 1.0f, 10.0f, GOLD);
-    DrawCircle(static_cast<int>(shieldX), static_cast<int>(y - 15), 2.0f, GOLD_DARK);
-
-    DR(x - 5.0f, y - 29.0f, 10.0f, 5.0f, GOLD);
-    DR(x - 5.0f, y - 29.0f, 10.0f, 1.0f, GOLD_DARK);
-    DR(x - 3.0f - s * 6.0f, y - 30.0f, 6.0f, 2.0f, PLUM);
-    DR(x - 2.0f - s * 5.0f, y - 31.0f, 3.0f, 2.0f, PLUM);
-
-    DR(x - 4.0f, y - 24.0f, 8.0f, 7.0f, SKIN);
-    DR(x + s * 4.0f - 1.0f, y - 24.0f, 2.0f, 7.0f, GOLD_DARK);
-    DR(x + s * 4.0f - 1.0f, y - 22.0f, 2.0f, 2.0f, Color{30, 24, 40, 255});
-    DR(x - 4.0f, y - 24.0f, 2.0f, 7.0f, Color{212, 160, 110, 255});
-
-    const float attackProgress = fmaxf(0.0f, 1.0f - warrior.attackTimer / ATTACK_DURATION);
-    const float handX = x + s * 7.0f;
-    const float handY = y - 14.0f;
-    DR(handX - 2.0f, handY - 1.5f, 3.0f, 3.0f, SKIN);
-
+static int WarriorFrame() {
+    if (warrior.crouching) return warrior.attackTimer > 0.0f ? 12 : 11;
     if (warrior.attackTimer > 0.0f) {
-        const float t = attackProgress;
-        const float tipX = handX + s * (5.0f + t * 20.0f);
-        const float tipY = handY - 19.0f + t * 20.0f;
-        for (int trail = 2; trail >= 1; --trail) {
-            const float back = 7.0f * static_cast<float>(trail);
-            DrawLineEx({handX - s * back * 0.4f, handY + back * 0.7f},
-                       {tipX - s * back * 0.4f, tipY + back * 0.7f},
-                       3.0f, Fade(STEEL, fmaxf(0.0f, 0.55f - t * 0.4f)));
-        }
-        DrawLineEx({handX, handY}, {tipX, tipY}, 3.0f, Color{226, 232, 240, 255});
-        DrawCircle(static_cast<int>(handX), static_cast<int>(handY + 2), 2.0f, GOLD);
-    } else {
-        DR(handX - 1.5f, handY + 2.0f, 3.0f, 2.0f, GOLD_DARK);
-        const float bladeX = x + s * 6.0f;
-        DrawLineEx({handX, handY}, {bladeX + s * 4.0f, y - 18.0f}, 2.5f, STEEL);
-        DrawLineEx({bladeX + s * 4.0f, y - 18.0f}, {bladeX + s * 5.0f, y - 20.0f}, 2.0f, Color{220, 228, 240, 255});
+        const float p = 1.0f - fmaxf(0.0f, warrior.attackTimer) / ATTACK_DURATION;
+        return p < 0.34f ? 8 : (p < 0.67f ? 9 : 10);
     }
+    if (!warrior.grounded) return warrior.velocity.y < 0.0f ? 6 : 7;
+    if (warriorMoving) return 2 + ((static_cast<int>(animTime * 9.0f) & 3));
+    return static_cast<int>(sinf(animTime * 3.0f) * 0.5f + 0.5f);
+}
+
+static void DrawWarrior() {
+    DrawWarriorShadow();
+    DrawSheetFrame(warriorSheet, WarriorFrame(), warrior.position.x, warrior.position.y, warrior.facing);
 }
 
 static void DrawSlime(const Enemy& enemy) {
     const float x = enemy.position.x;
     const float y = enemy.position.y;
-    const float squash = 6.0f + sinf(animTime * 3.0f + enemy.phase) * 1.4f;
     DrawEllipse(static_cast<int>(x), static_cast<int>(y), 9.0f, 2.0f, Fade(BLACK, 0.35f));
-    DrawEllipse(static_cast<int>(x), static_cast<int>(y - 8), 9.0f, squash, Color{52, 138, 58, 255});
-    DrawEllipse(static_cast<int>(x), static_cast<int>(y - 9), 7.0f, squash - 1.5f, Color{76, 175, 80, 255});
-    DrawEllipse(static_cast<int>(x - 3), static_cast<int>(y - 11), 2.5f, squash * 0.3f, Fade(WHITE, 0.55f));
-    const int fx = enemy.facing;
-    DR(x + fx * 2.0f - 1.0f, y - 11.0f, 2.0f, 3.0f, Color{20, 60, 26, 255});
-    DR(x + fx * 2.0f - 0.5f, y - 10.0f, 1.0f, 1.0f, Color{220, 235, 130, 255});
-    DR(x - 2.0f, y - 5.0f, 4.0f, 1.0f, Color{38, 98, 42, 255});
+    const int frame = (static_cast<int>((animTime * 3.0f + enemy.phase) * 3.0f)) & 3;
+    DrawSheetFrame(slimeSheet, frame, x, y, enemy.facing);
 }
 
 static void DrawBat(const Enemy& enemy) {
     const float x = enemy.position.x;
     const float y = enemy.position.y;
-    const int fx = enemy.facing;
-    const Color body = {72, 48, 94, 255};
-    const Color wing = {56, 38, 76, 255};
-    const float flap = sinf(animTime * 11.0f + enemy.phase) * 0.9f;
-    const float a = flap * 0.9f;
-
-    for (int side = -1; side <= 1; side += 2) {
-        const float sx = x + fx * side * 3.5f;
-        const float ang = a * side;
-        const float lift = side == fx ? -0.12f : 0.12f;
-        const float ex1 = sx + cosf(ang + lift) * 7.0f;
-        const float ey1 = y - 3.0f + sinf(ang + lift) * 8.0f;
-        const float ex2 = ex1 + cosf(ang * 0.7f + lift) * 5.0f;
-        const float ey2 = ey1 + sinf(ang * 0.7f + lift) * 4.0f;
-        DrawLineEx({sx, y - 3.0f}, {ex1, ey1}, 3.0f, wing);
-        DrawLineEx({ex1, ey1}, {ex2, ey2}, 2.0f, wing);
-    }
-
-    DrawEllipse(static_cast<int>(x), static_cast<int>(y - 2), 6.0f, 5.0f, body);
-    DrawEllipse(static_cast<int>(x), static_cast<int>(y - 3), 4.0f, 3.5f, Color{92, 66, 118, 255});
-    DR(x - 4.0f, y - 7.0f, 2.0f, 3.0f, body);
-    DR(x + 2.0f, y - 7.0f, 2.0f, 3.0f, body);
-    DR(x - 3.0f - fx, y - 4.0f, 2.0f, 2.0f, Color{255, 60, 60, 255});
-    DR(x + 1.0f - fx, y - 4.0f, 2.0f, 2.0f, Color{255, 60, 60, 255});
-    DR(x - 2.0f, y + 1.0f, 1.0f, 2.0f, WHITE);
-    DR(x + 1.0f, y + 1.0f, 1.0f, 2.0f, WHITE);
+    const int frame = (static_cast<int>((animTime * 11.0f + enemy.phase * 4.0f))) % 3;
+    DrawSheetFrame(batSheet, frame, x, y, enemy.facing);
 }
 
 static void DrawEnemy(const Enemy& enemy) {
@@ -554,6 +488,28 @@ static void DrawGameFrame() {
     EndDrawing();
 }
 
+static bool LoadSpriteSheet(sprites::Sheet* sheet, const char* path,
+                            const sprites::ArtDef& def, const sprites::Palette& pal) {
+    Texture2D tex = LoadTexture(path);
+    if (IsTextureValid(tex)) {
+        sheet->tex = tex;
+        sheet->frameW = def.w;
+        sheet->frameH = def.h;
+        sheet->frameCount = static_cast<int>(def.frames.size());
+        SetTextureFilter(tex, TEXTURE_FILTER_POINT);
+        return true;
+    }
+    TraceLog(LOG_WARNING, "No se encontro %s, usando arte embebido", path);
+    *sheet = sprites::LoadSheetFromImage(def, pal, true);
+    return sheet->valid();
+}
+
+static void loadSprites() {
+    LoadSpriteSheet(&warriorSheet, "assets/sprites/warrior.png", sprites::WarriorArt(), sprites::WARRIOR_PAL);
+    LoadSpriteSheet(&slimeSheet, "assets/sprites/slime.png", sprites::SlimeArt(), sprites::SLIME_PAL);
+    LoadSpriteSheet(&batSheet, "assets/sprites/bat.png", sprites::BatArt(), sprites::BAT_PAL);
+}
+
 int main() {
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Cadash Remake - Side Scroller");
     if (!IsWindowReady()) return 1;
@@ -563,6 +519,7 @@ int main() {
         CloseWindow();
         return 1;
     }
+    loadSprites();
     camera.offset = {INTERNAL_WIDTH * 0.5f, INTERNAL_HEIGHT * 0.5f};
     camera.target = {INTERNAL_WIDTH * 0.5f, INTERNAL_HEIGHT * 0.5f};
     camera.zoom = 1.0f;
@@ -571,6 +528,9 @@ int main() {
     emscripten_set_main_loop(DrawGameFrame, 0, 1);
 #else
     while (!WindowShouldClose()) DrawGameFrame();
+    if (IsTextureValid(warriorSheet.tex)) UnloadTexture(warriorSheet.tex);
+    if (IsTextureValid(slimeSheet.tex)) UnloadTexture(slimeSheet.tex);
+    if (IsTextureValid(batSheet.tex)) UnloadTexture(batSheet.tex);
     UnloadRenderTexture(internalTarget);
     CloseWindow();
 #endif
